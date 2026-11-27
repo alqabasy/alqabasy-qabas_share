@@ -1,5 +1,5 @@
 {
-  "name": "qabas-share-route",
+  "name": "alqabasy-qabas-share",
   "main": "edge/share-route.mjs",
   "compatibility_date": "2026-11-19",
   "workers_dev": false,
