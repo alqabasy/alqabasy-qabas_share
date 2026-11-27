@@ -4,7 +4,7 @@ import {validate} from './relay-validation.js';
 const root=document.getElementById('relay-content');
 const match=/^\/r\/([A-Za-z0-9_-]{43})\/?$/.exec(location.pathname);
 const demoMode=location.pathname==='/__demo/'||location.pathname==='/__demo';
-const api=demoMode?createDemoApi():match?createRelayApi(window.__ENV__?.API_BASE_URL||'https://api.qabas.one',match[1]):null;
+const api=demoMode?createDemoApi():match?createRelayApi(window.__ENV__?.API_BASE_URL||'https://api.alqabasy.com',match[1]):null;
 const supported=new Set(['text','multiline_text','decimal','integer','date','select','boolean','attachments','evidence']);
 const uploads=new Map();
 let request, receipt, draftKey, draftAnswers, submitting=false, pollTimer;
