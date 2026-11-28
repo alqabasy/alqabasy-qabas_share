@@ -53,7 +53,6 @@ function render(){
   attachments=createAttachments({api,changed:()=>updateAction(),expired:unavailable});
   const shell=el('div','relay-layout'),intro=el('header','relay-intro');
   intro.append(el('h1','',request.title||request.form.title));
-  if(request.instructions)intro.append(el('p','relay-description',request.instructions));
   if(request.expiresAt&&!Number.isNaN(Date.parse(request.expiresAt)))intro.append(el('p','relay-deadline',`متاح حتى ${new Intl.DateTimeFormat('ar-EG',{dateStyle:'medium'}).format(new Date(request.expiresAt))}`));
   shell.append(intro);
   const form=el('form','relay-form');form.noValidate=true;form.setAttribute('aria-label','نموذج الرد');
