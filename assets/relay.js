@@ -1,57 +1,116 @@
 import {createRelayApi,RelayError} from './relay-api.js';
 import {validate} from './relay-validation.js';
+import {createAttachments} from './relay-attachments.js';
+import {userError} from './relay-state.js';
 
 const root=document.getElementById('relay-content');
 const match=/^\/r\/([A-Za-z0-9_-]{43})\/?$/.exec(location.pathname);
 const demoMode=location.pathname==='/__demo/'||location.pathname==='/__demo';
 const api=demoMode?createDemoApi():match?createRelayApi(window.__ENV__?.API_BASE_URL||'https://api.alqabasy.com',match[1]):null;
 const supported=new Set(['text','multiline_text','decimal','integer','date','select','boolean','attachments','evidence']);
-const uploads=new Map();
-let request, receipt, draftKey, draftAnswers, submitting=false, pollTimer;
+let request, receipt, draftKey, draftAnswers, attachments, updateAction=()=>{};
+let submission='editing', requestState='loading';
+let lockedAnswers;
+window.addEventListener('pagehide',()=>attachments?.dispose());
+window.addEventListener('pageshow',e=>{if(e.persisted)location.reload();});
 function el(tag,cls='',value){const n=document.createElement(tag);if(cls)n.className=cls;if(value!==undefined)n.textContent=value;return n;}
 function button(label,fn,cls='button'){const b=el('button',cls,label);b.type='button';b.addEventListener('click',fn);return b;}
 function createDemoApi(){let uploadCount=0;return {get:async()=>({title:'مراجعة تعاملاتك',instructions:'دخل الرصيد، صور الكرت او التقارير او الكشوف المتاحه للفترة',expiresAt:new Date(Date.now()+86400000*14).toISOString(),allowPartial:true,allowMultiple:true,status:'ANSWERED',form:{title:'مراجعة تعاملات الفتره',fields:[{key:'balance_end_of_period',type:'integer',label:'رصيد نهاية المده',required:true},{key:'attachments',type:'attachments',label:'المرفقات',required:true,constraints:{maxFiles:5,allowedMediaTypes:['application/pdf','image/jpeg','image/png']}}],locale:'ar-EG',schemaVersion:1}}),createUpload:async()=>({sessionId:`demo-upload-${++uploadCount}`}),completeUpload:async(sessionId,file,onProgress)=>{onProgress?.(100);return {evidenceId:`demo-evidence-${sessionId}`};},evidence:async()=>({status:'READY'}),submit:async()=>({status:'SUBMITTED',submissionId:'demo-submission'})};}
 function show(node){root.replaceChildren(node);root.setAttribute('aria-busy','false');}
 function state(title,detail,action){const w=el('div','share-state');w.append(el('h1','',title),el('p','',detail));if(action)w.append(action);show(w);}
-function notice(text){let n=document.getElementById('relay-notice');if(!n){n=el('p','message');n.id='relay-notice';n.role='alert';document.querySelector('.relay-actions')?.prepend(n);}if(n)n.textContent=text;}
-function unavailable(error){if(error.status===404)return state('الرابط غير متاح','تحقق من الرابط أو اطلب رابطًا جديدًا من المرسل.');if(error.status===410)return state('انتهت صلاحية الرابط','اطلب رابطًا جديدًا من المرسل للمتابعة.');state('تعذّر فتح الطلب','تحقق من اتصالك ثم حاول مرة أخرى.',button('المحاولة مجددًا',load));}
-async function load(){if(!api)return state('الرابط غير صالح','تحقق من الرابط الذي وصلك.');root.setAttribute('aria-busy','true');try{request=await api.get();if(['FULFILLED','EXPIRED','CANCELLED'].includes(request.status)||new Date(request.expiresAt)<=new Date())return state('هذا الطلب غير متاح','اطلب من المرسل رابطًا جديدًا إذا احتجت إلى الرد.');if(!request.allowMultiple&&['ANSWERED','PARTIALLY_ANSWERED'].includes(request.status))return state('تم استلام رد سابق','لا يقبل هذا الرابط ردًا إضافيًا.');if(request.form?.schemaVersion!==1||!Array.isArray(request.form.fields)||request.form.fields.some(f=>f.required&&!supported.has(f.type)))return state('تعذّر عرض النموذج','يحتوي الطلب على حقل لا يمكن عرضه. تواصل مع المرسل.');render();}catch(e){unavailable(e);}}
-function fieldView(field,index){const wrap=el('div','relay-field'),id=`relay-field-${index}`,label=el('label','',field.label);label.htmlFor=id;wrap.append(label);label.append(el('span',field.required?'required':'optional',field.required?' · مطلوب':' · اختياري'));if(field.description){const d=el('p','field-hint',field.description);d.id=`${id}-hint`;wrap.append(d);}let input;
+function notice(text){let n=document.getElementById('relay-notice');if(!n){n=el('p','message');n.id='relay-notice';n.role='alert';document.querySelector('.relay-actions')?.prepend(n);}if(n){n.textContent=text;n.hidden=!text;}}
+function unavailable(error){
+  attachments?.dispose();requestState='unavailable';
+  if([401,403,404].includes(error.status))return state('الرابط غير متاح','تحقق من الرابط أو اطلب رابطًا جديدًا من المرسل.');
+  if(error.status===410)return state('انتهت صلاحية الرابط','اطلب رابطًا جديدًا من المرسل للمتابعة.');
+  state('تعذّر فتح الطلب',userError(error),button('المحاولة مجددًا',load));
+}
+async function load(){
+  if(!api)return state('الرابط غير صالح','تحقق من الرابط الذي وصلك.');
+  requestState='loading';state('جارٍ فتح الطلب','ستظهر المعلومات المطلوبة خلال لحظات.');root.setAttribute('aria-busy','true');
+  const slow=setTimeout(()=>{const detail=root.querySelector('.share-state p');if(requestState==='loading'&&detail)detail.textContent='يستغرق فتح الطلب وقتًا أطول. تحقق من اتصالك بالإنترنت.';},8000);
+  try{
+    request=await api.get();
+    if(request.status==='EXPIRED'||new Date(request.expiresAt)<=new Date())return unavailable({status:410});
+    if(['FULFILLED','CANCELLED'].includes(request.status)){requestState='closed';return state('أُغلق هذا الطلب','لا يقبل هذا الرابط ردودًا جديدة. يمكنك التواصل مع المرسل.');}
+    if(!request.allowMultiple&&['ANSWERED','PARTIALLY_ANSWERED'].includes(request.status)){requestState='closed';return state('تم استلام رد سابق','لا يقبل هذا الرابط ردًا إضافيًا.');}
+    if(request.form?.schemaVersion!==1||!Array.isArray(request.form.fields)||request.form.fields.some(f=>f.required&&!supported.has(f.type)))return state('تعذّر عرض النموذج','تواصل مع المرسل للحصول على طلب جديد.');
+    requestState='active';render();
+  }catch(e){unavailable(e);}finally{clearTimeout(slow);}
+}
+function fieldView(field,index){const wrap=el('div','relay-field'),id=`relay-field-${index}`,label=el('label','',field.label);label.htmlFor=id;wrap.append(label);if(field.required&&!request.allowPartial)label.append(el('span','required',' · مطلوب'));if(field.description){const d=el('p','field-hint',field.description);d.id=`${id}-hint`;wrap.append(d);}let input;
   if(field.type==='multiline_text')input=el('textarea','relay-input');else if(field.type==='select'){input=el('select','relay-input');input.append(new Option('اختر إجابة',''));for(const option of field.constraints?.options||[]){const value=typeof option==='string'?option:option.value;const name=typeof option==='string'?option:option.label;input.append(new Option(name,value));}}else if(field.type==='boolean'){input=el('input');input.type='checkbox';wrap.classList.add('relay-check');}else if(['attachments','evidence'].includes(field.type)){
-    label.removeAttribute('for');
-    const constraints=field.constraints||{},allowed=constraints.allowedMediaTypes||['application/pdf','image/jpeg','image/png'],limit=Math.min(5,constraints.maxFiles??5),listId=`${id}-files`,upload=el('div','relay-upload');
-    const imageTypes=allowed.filter(type=>type.startsWith('image/'));
-    const photoPicker=imageTypes.length>0&&limit>1?el('input','visually-hidden'):null;
-    if(photoPicker){photoPicker.type='file';photoPicker.multiple=true;photoPicker.accept=imageTypes.join(',');photoPicker.tabIndex=-1;photoPicker.setAttribute('aria-hidden','true');}
-    const camera=imageTypes.length?el('input','visually-hidden'):null;
-    if(camera){camera.type='file';camera.accept=imageTypes.join(',');camera.capture='environment';camera.tabIndex=-1;camera.setAttribute('aria-hidden','true');}
-    const actions=el('div','relay-upload-actions');
-    let photoButton;
-    if(photoPicker){photoButton=button('اختيار صور متعددة',()=>photoPicker.click(),'relay-camera-button');photoButton.setAttribute('aria-label',`${field.label}${field.required?'، مطلوب':''}: اختيار صور متعددة`);photoButton.setAttribute('aria-controls',listId);actions.append(photoButton);}
-    let cameraButton;
-    if(camera){cameraButton=button('التقاط صورة بالكاميرا',()=>camera.click(),'relay-camera-button');cameraButton.setAttribute('aria-label',`${field.label}${field.required?'، مطلوب':''}: التقاط صورة بالكاميرا`);cameraButton.setAttribute('aria-controls',listId);actions.append(cameraButton);}
-    input=photoButton||cameraButton;input.id=`${id}-choose`;input.setAttribute('aria-describedby',[field.description?`${id}-hint`:'',`${id}-upload-hint`].filter(Boolean).join(' '));
-    for(const control of [photoButton,cameraButton].filter(Boolean))control.setAttribute('aria-describedby',[field.description?`${id}-hint`:'',`${id}-upload-hint`].filter(Boolean).join(' '));
-    const formats=allowed.map(type=>({'application/pdf':'PDF','image/jpeg':'JPG','image/png':'PNG'}[type]||type)).join(' أو ');
-    const info=el('p','field-hint',`${formats} · حتى ${new Intl.NumberFormat('ar-EG').format(limit)} ملفات · ٢٠ ميغابايت لكل ملف`);info.id=`${id}-upload-hint`;
-    const prompt=el('p','relay-upload-prompt','أضف صورًا أو مستندات للفترة'),list=el('ul','relay-files');list.id=listId;list.setAttribute('aria-label',`الملفات المختارة لـ ${field.label}`);
-    upload.append(prompt,actions,info);if(photoPicker)upload.append(photoPicker);if(camera)upload.append(camera);wrap.append(upload);
-    const err=el('p','relay-error');err.id=`${id}-error`;err.setAttribute('role','alert');err.hidden=true;
-    function error(message){err.textContent=message;err.hidden=!message;for(const control of [photoButton,cameraButton].filter(Boolean)){control.setAttribute('aria-invalid',String(!!message));control.setAttribute('aria-describedby',[field.description?`${id}-hint`:'',`${id}-upload-hint`,message?err.id:''].filter(Boolean).join(' '));}}
-    wrap.append(err,list);uploads.set(field.key,[]);
-    photoPicker?.addEventListener('change',()=>{addFiles(field,photoPicker.files,list,error);photoPicker.value='';});
-    camera?.addEventListener('change',()=>{addFiles(field,camera.files,list,error);camera.value='';});
-    return {wrap,input,error,field};
+    return attachments.mount({...field,showRequired:field.required&&!request.allowPartial},index);
   }else{input=el('input','relay-input');input.type=field.type==='date'?'date':'text';if(field.type==='decimal'){input.inputMode='decimal';input.classList.add('relay-numeric');input.dir='ltr';}if(field.type==='integer'){input.inputMode='numeric';input.classList.add('relay-numeric');input.dir='ltr';}}
   const placeholders={text:'اكتب إجابتك هنا',multiline_text:'أضف التفاصيل هنا',decimal:'مثال: ١٢٣٫٤٥',integer:'مثال: ١٢٣٤'};
   if(typeof field.placeholder==='string'&&field.placeholder)input.placeholder=field.placeholder;else if(placeholders[field.type])input.placeholder=placeholders[field.type];
   if(field.type==='date'){if(typeof field.constraints?.min==='string')input.min=field.constraints.min;if(typeof field.constraints?.max==='string')input.max=field.constraints.max;}
-  input.id=id;if(field.required)input.required=true;if(field.constraints?.maxLength&&'maxLength'in input)input.maxLength=field.constraints.maxLength;if(field.description)input.setAttribute('aria-describedby',`${id}-hint`);const err=el('p','relay-error');err.id=`${id}-error`;err.setAttribute('role','alert');err.hidden=true;function error(message){err.textContent=message;err.hidden=!message;input.setAttribute('aria-invalid',String(!!message));input.setAttribute('aria-describedby',[field.description?`${id}-hint`:'',message?err.id:''].filter(Boolean).join(' '));}
-  wrap.append(input,err);input.addEventListener('input',()=>error(''));
+  input.id=id;if(field.required&&!request.allowPartial)input.required=true;if(field.constraints?.maxLength&&'maxLength'in input)input.maxLength=field.constraints.maxLength;if(field.description)input.setAttribute('aria-describedby',`${id}-hint`);const err=el('p','relay-error');err.id=`${id}-error`;err.setAttribute('role','alert');err.hidden=true;function error(message){err.textContent=message;err.hidden=!message;input.setAttribute('aria-invalid',String(!!message));input.setAttribute('aria-describedby',[field.description?`${id}-hint`:'',message?err.id:''].filter(Boolean).join(' '));}
+  wrap.append(input,err);input.addEventListener('input',()=>{error('');updateAction();});input.addEventListener('blur',()=>error(validate({...field,required:field.required&&!request.allowPartial},input)[0]));
   return {wrap,input,error,field};}
-function addFiles(field,files,list,error){const rows=uploads.get(field.key),limit=Math.min(5,field.constraints?.maxFiles??5),allowed=field.constraints?.allowedMediaTypes||['application/pdf','image/jpeg','image/png'];for(const file of files){if(rows.filter(r=>r.state!=='removed').length>=limit){error(`الحد الأقصى ${limit} ملفات.`);break;}if(!allowed.includes(file.type)||file.size<1||file.size>20*1024*1024||file.name.length>200){error(`الملف ${file.name} غير مقبول. تحقق من النوع والحجم والاسم.`);continue;}const row={file,state:'selected',progress:0};rows.push(row);const li=el('li','relay-file-row');row.node=li;list.append(li);drawFile(row,field);upload(row,field);} }
-function drawFile(row,field){const li=row.node;li.replaceChildren();const title=el('b','',row.file.name);title.dir='auto';const status=el('span','relay-file-status',({selected:'جاهز للرفع',uploading:'جارٍ الرفع',processing:'قيد فحص الملف',ready:'جاهز',rejected:'رُفض الملف',failed:'تعذّر رفع الملف'})[row.state]);status.setAttribute('role','status');status.setAttribute('aria-live',row.state==='uploading'&&row.progress>0?'off':'polite');li.append(title,status);if(row.state==='uploading'){const p=el('progress');p.max=100;p.value=row.progress;p.setAttribute('aria-label',`تقدم رفع ${row.file.name}`);li.append(p);}if(['failed','rejected'].includes(row.state)){const retry=button('إعادة المحاولة',()=>upload(row,field),'relay-small-button');retry.setAttribute('aria-label',`إعادة رفع ${row.file.name}`);li.append(retry);}if(row.state!=='uploading'){const remove=button('إزالة',()=>{row.state='removed';li.remove();},'relay-small-button');remove.setAttribute('aria-label',`إزالة ${row.file.name}`);li.append(remove);}}
-async function upload(row,field){row.state='uploading';row.progress=0;drawFile(row,field);try{const session=await api.createUpload(field.key,row.file);const result=await api.completeUpload(session.sessionId,row.file,p=>{row.progress=p;drawFile(row,field);});row.id=result.evidenceId;row.state='processing';drawFile(row,field);schedulePoll();}catch(e){row.state=e.status===410?'failed':'failed';drawFile(row,field);if(e.status===410)unavailable(e);}}
-function schedulePoll(){if(pollTimer)return;pollTimer=setTimeout(async()=>{pollTimer=null;let pending=false;for(const [key,rows] of uploads){for(const row of rows){if(row.state!=='processing')continue;pending=true;try{const result=await api.evidence(row.id);if(result.status==='READY')row.state='ready';else if(result.status==='REJECTED')row.state='rejected';else if(result.status==='FAILED')row.state='failed';drawFile(row,{key});}catch(e){if(e.status===410)return unavailable(e);}}}if(pending&&[...uploads.values()].some(rows=>rows.some(r=>r.state==='processing')))schedulePoll();},5000);}
-function render(){const shell=el('div','relay-layout');const intro=el('header','relay-intro');intro.append(el('p','eyebrow','طلب معلومات'),el('h1','',request.title||request.form.title));if(request.expiresAt)intro.append(el('p','relay-deadline',`الرابط متاح حتى ${new Intl.DateTimeFormat('ar-EG',{dateStyle:'medium',timeStyle:'short'}).format(new Date(request.expiresAt))}`));shell.append(intro);const form=el('form','relay-form');form.noValidate=true;form.setAttribute('aria-label','نموذج الرد');const controls=[];for(const [index,field] of request.form.fields.entries()){if(!supported.has(field.type))continue;const control=fieldView(field,index);controls.push(control);form.append(control.wrap);}const actions=el('div','relay-actions');const submit=el('button','button','إرسال الرد');submit.type='submit';actions.append(submit);if(request.allowPartial)actions.append(el('p','field-hint','يمكنك إرسال المعلومات المتاحة الآن وإكمال الباقي لاحقًا إذا كان الرابط يسمح برد آخر.'));form.append(actions);form.addEventListener('submit',async e=>{e.preventDefault();if(submitting)return;const answers={};let first;for(const control of controls){const {field,input,error}=control;if(['attachments','evidence'].includes(field.type)){const rows=uploads.get(field.key).filter(r=>r.state!=='removed');const ids=rows.filter(r=>['processing','ready'].includes(r.state)).map(r=>r.id);const message=rows.some(r=>['selected','uploading'].includes(r.state))?'انتظر اكتمال رفع الملفات.':rows.some(r=>['rejected','failed'].includes(r.state))?'استبدل الملفات المرفوضة أو أزلها.':field.required&&!ids.length&&!request.allowPartial?'أضف ملفًا واحدًا على الأقل.':'';error(message);if(message)first??=input;if(ids.length)answers[field.key]=ids;continue;}const [message,value]=validate({...field,required:field.required&&!request.allowPartial},input);error(message);if(message)first??=input;else if(value!==''&&!(field.type==='boolean'&&!value&&!field.required))answers[field.key]=value;}if(first){first.focus();notice('تحقق من الحقول المميزة ثم حاول مرة أخرى.');return;}if(!Object.keys(answers).length){notice('أضف إجابة واحدة على الأقل.');return;}const serialized=JSON.stringify(answers);if(serialized!==draftAnswers){draftKey=`reply-${crypto.randomUUID()}`;draftAnswers=serialized;}submitting=true;submit.disabled=true;submit.textContent='جارٍ إرسال الرد';try{receipt=await api.submit(draftKey,answers,receipt&&request.allowMultiple?receipt.submissionId:undefined);const pending=receipt.status==='EVIDENCE_PENDING';state('تم استلام ردك بنجاح',pending?'استلمنا إجاباتك وملفاتك. ما زالت الملفات قيد الفحص، وقد نتواصل معك إذا احتجنا إلى توضيح إضافي.':'استلمنا إجاباتك. سنراجع المعلومات وقد نتواصل معك إذا احتجنا إلى توضيح إضافي.',request.allowMultiple?button('إرسال رد إضافي',()=>{draftKey=null;draftAnswers=null;uploads.clear();render();}):null);}catch(err){if(err.status===410)return unavailable(err);notice(err.status===429?'طلبات كثيرة خلال وقت قصير. انتظر قليلًا ثم حاول مجددًا.':err.status===409?'تعذّر قبول الرد. قد يكون الرابط لا يقبل ردًا إضافيًا أو تغيرت البيانات أثناء إعادة المحاولة.':'تعذّر إرسال الرد. بقيت إجاباتك كما هي؛ حاول مرة أخرى.');}finally{submitting=false;submit.disabled=false;submit.textContent='إرسال الرد';}});shell.append(form);show(shell);}
+function render(){
+  attachments?.dispose();submission='editing';lockedAnswers=null;
+  attachments=createAttachments({api,changed:()=>updateAction(),expired:unavailable});
+  const shell=el('div','relay-layout'),intro=el('header','relay-intro');
+  intro.append(el('h1','',request.title||request.form.title));
+  if(request.instructions)intro.append(el('p','relay-description',request.instructions));
+  if(request.expiresAt&&!Number.isNaN(Date.parse(request.expiresAt)))intro.append(el('p','relay-deadline',`متاح حتى ${new Intl.DateTimeFormat('ar-EG',{dateStyle:'medium'}).format(new Date(request.expiresAt))}`));
+  shell.append(intro);
+  const form=el('form','relay-form');form.noValidate=true;form.setAttribute('aria-label','نموذج الرد');
+  const fields=el('fieldset','relay-fields'),controls=[];fields.append(el('legend','visually-hidden','المعلومات المطلوبة'));
+  for(const [index,field] of request.form.fields.entries()){if(!supported.has(field.type))continue;const control=fieldView(field,index);controls.push(control);fields.append(control.wrap);}
+  const actions=el('div','relay-actions'),submit=el('button','button','إرسال الرد'),guidance=el('p','field-hint');
+  guidance.id='submission-guidance';guidance.role='status';submit.type='submit';submit.setAttribute('aria-describedby',guidance.id);actions.append(submit,guidance);
+  if(request.allowPartial)actions.append(el('p','relay-partial','أرسل ما يتوفر لديك من المعلومات أو المرفقات.'));
+  form.append(fields,actions);shell.append(form);show(shell);
+  function collect(showErrors=false){
+    const answers={};let first,message='';
+    for(const control of controls){
+      const {field,input,error}=control;let issue='',value;
+      if(['attachments','evidence'].includes(field.type)){
+        const rows=attachments.rows(field.key);issue=attachments.problem(field.key);
+        if(!issue&&field.required&&!request.allowPartial&&!rows.length)issue='أضف مرفقًا واحدًا على الأقل.';
+        value=rows.filter(r=>['processing','ready'].includes(r.state)).map(r=>r.id);
+        if(value.length)answers[field.key]=value;
+      }else{
+        [issue,value]=validate({...field,required:field.required&&!request.allowPartial},input);
+        if(!issue&&value!==''&&!(field.type==='boolean'&&!value&&!field.required))answers[field.key]=value;
+      }
+      if(showErrors)error(issue);
+      if(issue){first??=input;message ||= issue;}
+    }
+    if(!message&&!Object.keys(answers).length)message='أضف المعلومات أو المرفقات المطلوبة لتتمكن من الإرسال.';
+    return {answers,first,message};
+  }
+  updateAction=()=>{
+    if(!form.isConnected)return;
+    const {message}=collect();
+    submit.disabled=submission==='submitting'||(submission!=='uncertain'&&!!message)||requestState!=='active';
+    submit.textContent=submission==='submitting'?'جارٍ الإرسال…':submission==='uncertain'?'التحقق وإعادة الإرسال':'إرسال الرد';
+    guidance.textContent=submission==='uncertain'?'لم نتأكد من استلام الرد. أعد المحاولة بنفس البيانات بأمان.':message;
+    fields.disabled=['submitting','uncertain'].includes(submission);
+  };
+  form.addEventListener('submit',async event=>{
+    event.preventDefault();if(submission==='submitting'||requestState!=='active')return;
+    const result=collect(true);
+    if(submission!=='uncertain'&&result.message){result.first?.focus();updateAction();return;}
+    const answers=lockedAnswers||result.answers,serialized=JSON.stringify(answers);
+    if(serialized!==draftAnswers){draftKey=`reply-${crypto.randomUUID()}`;draftAnswers=serialized;}
+    submission='submitting';updateAction();notice('');
+    try{
+      const response=await api.submit(draftKey,answers,receipt&&request.allowMultiple?receipt.submissionId:undefined);
+      if(!response?.submissionId||!['SUBMITTED','EVIDENCE_PENDING'].includes(response.status))throw new RelayError(0,'ambiguous');
+      receipt=response;submission='submitted';attachments.dispose();
+      state('تم استلام ردك','شكرًا لتعاونكم. '+(receipt.status==='EVIDENCE_PENDING'?'تم استلام المعلومات والمرفقات، وجارٍ تجهيزها.':'تم إرسال المعلومات بنجاح.')+' يمكنك إغلاق هذه الصفحة الآن.',request.allowMultiple?button('إضافة معلومات أخرى',()=>{draftKey=null;draftAnswers=null;render();}):null);
+      root.querySelector('h1').tabIndex=-1;root.querySelector('h1').focus();
+    }catch(error){
+      if(error.status===410)return unavailable(error);
+      // Keep the exact payload/key after an ambiguous outcome; edits could create a second response.
+      if(!error.status||error.status>=500){submission='uncertain';lockedAnswers=answers;notice('انقطع التأكيد قبل معرفة النتيجة. بقيت معلوماتك محفوظة في هذه الصفحة.');}
+      else {submission='failed';lockedAnswers=null;notice(error.status===409?'تعذّر قبول الرد. تواصل مع المرسل للتأكد من حالة الطلب.':`لم يتم إرسال الرد. ${userError(error)}`);}
+      if(error.field){const control=controls.find(c=>c.field.key===error.field);control?.error('تحقق من هذه الإجابة.');control?.input.focus();}
+    }finally{updateAction();}
+  });
+  updateAction();
+}
 load();

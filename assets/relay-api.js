@@ -20,7 +20,7 @@ export function createRelayApi(origin, token) {
         xhr.timeout=120000;
         xhr.ontimeout=()=>reject(new RelayError(0,'timeout'));
         xhr.onabort=()=>reject(new DOMException('Aborted','AbortError'));
-        if(signal?.aborted){reject(new DOMException('Aborted','AbortError'));return;}
+        if(signal?.aborted){signal.removeEventListener('abort',abort);reject(new DOMException('Aborted','AbortError'));return;}
         xhr.upload.onprogress=e=>{ if(e.lengthComputable) onProgress(Math.round(e.loaded/e.total*100)); };
         xhr.onerror=()=>reject(new RelayError(0,'network','Network error'));
         xhr.onload=()=>{let payload={};try{payload=JSON.parse(xhr.responseText)}catch{}; if(xhr.status<200||xhr.status>=300||payload.success!==true) reject(new RelayError(xhr.status,payload.error?.code,payload.error?.message,payload.error?.field));else resolve(payload.data);};
@@ -36,6 +36,7 @@ export function createRelayApi(origin, token) {
     try {
     const response=await fetch(url,{method,headers,body:body===undefined?undefined:binary?body:JSON.stringify(body),cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal});
     const payload=await response.json().catch(()=>({}));
+    if(response.ok&&typeof payload.success!=='boolean')throw new RelayError(0,'ambiguous');
     if(!response.ok||payload.success!==true) throw new RelayError(response.status,payload.error?.code,payload.error?.message,payload.error?.field);
     return payload.data;
     } catch(error) {

@@ -156,3 +156,7 @@ vite.config.ts.timestamp-*
 .nx/cache
 .nx/workspace-data
 .nx/migrate-runs
+
+# Local browser verification artifacts
+.playwright-mcp/
+output/playwright/
