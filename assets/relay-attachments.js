@@ -1,5 +1,7 @@
-import {activeRows, limits, fileError, userError, recoverable, attachmentProblem} from './relay-state.js';
+import {activeRows, limits, fileError, userError, recoverable, attachmentProblem, evidencePresentation} from './relay-state.js';
 
+// Reserve at least half the public 180/15-minute budget for uploads, removals and replies.
+const pollCalls=[];
 const node=(tag,cls,text)=>{const n=document.createElement(tag);n.className=cls||'';if(text)n.textContent=text;return n;};
 const action=(text,fn,cls='relay-small-button')=>{const b=node('button',cls,text);b.type='button';b.onclick=fn;return b;};
 
@@ -37,29 +39,63 @@ export function createAttachments({api,changed,expired}) {
       if(row.file.type.startsWith('image/')){const img=node('img');img.src=row.url;img.alt='';view.append(img);}
       else view.append(node('span','relay-document',row.file.type==='application/pdf'?'PDF':row.file.name.split('.').pop().slice(0,8).toUpperCase()));
       const status=node('p','relay-file-status'),progress=node('progress');status.role='status';progress.max=100;progress.setAttribute('aria-label',`تقدم رفع ${row.file.name}`);
-      const retry=action('محاولة مجددًا',()=>{row.state=row.id?'processing':'selected';row.error='';row.polls=0;draw(row);if(row.id)poll(row);else pump();refresh();});
-      const remove=action('إزالة',()=>{row.state='removed';row.version++;row.controller?.abort();clearTimeout(row.timer);URL.revokeObjectURL(row.url);tile.remove();refresh();(row.group.more.hidden?row.group.add:row.group.more.querySelector('button')).focus();pump();});
+      const retry=action('التحقق مجددًا',()=>{row.state=row.id?'processing':'selected';row.error='';row.polls=0;draw(row);if(row.id)poll(row);else pump();refresh();});
+      const remove=action('إزالة',()=>removeRow(row));
       remove.classList.add('relay-remove');retry.classList.add('relay-retry');
       remove.setAttribute('aria-label',`إزالة ${row.file.name}`);
       const actions=node('div','relay-tile-actions');actions.append(retry,remove);tile.append(view,status,progress,actions);row.group.list.append(tile);
       row.ui={tile,view,status,progress,retry,remove};
     }
-    const {tile,status,progress,retry}=row.ui;
+    const {tile,status,progress,retry,remove}=row.ui;
+    remove.disabled=row.state==='removing'||row.removalDenied;remove.textContent=row.state==='removing'?'جارٍ الإزالة…':'إزالة';
     tile.dataset.state=row.state;status.classList.toggle('visually-hidden',row.state==='ready');status.setAttribute('aria-live',row.state==='uploading'?'off':'polite');
-    status.textContent=({selected:'بانتظار الرفع',uploading:row.progress===100?'جارٍ تجهيز المرفق':`جارٍ الرفع${row.progress==null?'':` ${row.progress}٪`}`,processing:'جارٍ تجهيز المرفق',ready:'تمت الإضافة',rejected:'لم نتمكن من قبول هذا الملف.',failed:'تعذّر رفع المرفق.'})[row.state];
+    status.textContent=({removing:'جارٍ إزالة المرفق',selected:'بانتظار الرفع',uploading:row.progress===100?'جارٍ تجهيز المرفق':`جارٍ الرفع${row.progress==null?'':` ${row.progress}٪`}`,processing:'جارٍ تجهيز المرفق',ready:'تمت الإضافة',rejected:'لم نتمكن من قبول هذا الملف.',failed:'تعذّر رفع المرفق.'})[row.state];
     if(row.progress==null)progress.removeAttribute('value');else progress.value=row.progress;
     retry.hidden=row.state!=='failed'||!row.retryable;
     refresh();
   }
+  async function removeRow(row){
+    if(disposed||['removed','removing'].includes(row.state)||row.removalDenied)return;
+    row.state='removing';row.version++;clearTimeout(row.timer);draw(row);
+    // Do not race DELETE against a completion still writing the stored object.
+    // Initialization is also allowed to finish so its evidence ID is retained.
+    if(row.task)await row.task;
+    if(disposed)return;
+    row.controller=new AbortController();
+    try{
+      if(row.completionUncertain){
+        const status=await api.evidence(row.id,row.controller.signal);
+        if(!status.session?.completedAt&&!['READY','PROCESSING','REJECTED'].includes(status.status)){
+          throw new Error('Completion still uncertain');
+        }
+        row.completionUncertain=false;
+      }
+      if(row.id){
+        const result=await api.abandonEvidence(row.id,row.controller.signal);
+        if(result?.evidenceId!==row.id||result.failureCode!=='USER_ABANDONED')throw new Error('Removal not confirmed');
+      }
+      if(disposed)return;
+      row.state='removed';URL.revokeObjectURL(row.url);row.ui.tile.remove();refresh();
+      (row.group.more.hidden?row.group.add:row.group.more.querySelector('button')).focus();pump();
+    }catch(error){
+      if(disposed)return;
+      row.state='failed';row.retryable=false;row.removalDenied=error.code==='evidence.abandon_unavailable';
+      row.error=row.completionUncertain?'لم نتأكد من اكتمال الرفع. انتظر قليلًا ثم حاول إزالة المرفق مجددًا.':`لم تتم إزالة المرفق. ${userError(error)}`;
+      draw(row);if(error.status===410)expired(error);
+    }
+  }
   async function poll(row){
     const version=row.version;
     if(!current(row,version)||row.state!=='processing')return;
+    while(pollCalls.length&&pollCalls[0]<=Date.now()-900000)pollCalls.shift();
+    if(pollCalls.length>=90){row.state='failed';row.retryable=true;row.error='انتظر قليلًا قبل التحقق من المرفقات مجددًا.';draw(row);return;}
+    pollCalls.push(Date.now());
     row.controller=new AbortController();
     try {
       const result=await api.evidence(row.id,row.controller.signal);
       if(!current(row,version))return;
-      if(result.status==='READY')row.state='ready';
-      else if(['REJECTED','FAILED'].includes(result.status)){row.state='rejected';row.error='لم نتمكن من قبول هذا الملف. أزله واختر ملفًا آخر.';}
+      row.failureCode=result.failureCode;row.scanAttempts=result.scanAttempts;row.action=result.action;
+      Object.assign(row,evidencePresentation(result));
       row.failures=0;
     }catch(error){
       if(!current(row,version))return;
@@ -70,28 +106,31 @@ export function createAttachments({api,changed,expired}) {
     if(!current(row,version))return;
     if(row.state==='processing'&&++row.polls>=24){row.state='failed';row.retryable=true;row.error='يستغرق تجهيز المرفق وقتًا أطول. تحقق مجددًا.';}
     draw(row);
-    if(row.state==='processing')row.timer=setTimeout(()=>poll(row),Math.min(15000,3000*2**(row.failures||0)));
+    if(row.state==='processing')row.timer=setTimeout(()=>poll(row),Math.min(120000,30000*2**(row.failures||0)));
   }
   async function upload(row){
     const version=++row.version;row.controller=new AbortController();row.state='uploading';row.progress=null;draw(row);
     try {
       const session=await api.createUpload(row.group.field.key,row.file,row.controller.signal);
+      row.id=session.evidenceId;row.sessionId=session.sessionId;
       if(!current(row,version))return;
+      row.completionUncertain=true;
       const result=await api.completeUpload(session.sessionId,row.file,p=>{if(current(row,version)){row.progress=p;draw(row);}},row.controller.signal);
+      if(result?.evidenceId){row.id=result.evidenceId;row.completionUncertain=false;}
       if(!current(row,version))return;
       if(!result?.evidenceId)throw new Error('Invalid completion envelope');
       row.id=result.evidenceId;row.state='processing';row.polls=0;draw(row);poll(row);
     }catch(error){
       if(!current(row,version))return;
       row.state='failed';row.error=userError(error);
-      // Upload POST idempotency is undocumented: never automatically replay it.
-      // An ambiguous completion may have succeeded; do not offer a duplicate-producing retry.
+      // No automatic POST replay. Preserve the session evidence ID for safe removal.
+      if(error.status&&error.status<500&&error.code!=='evidence.upload_in_progress')row.completionUncertain=false;
       row.retryable=false;
       if(recoverable(error))row.error+=' أزل المرفق واختره مجددًا إذا أردت إعادة رفعه.';
       draw(row);if(error.status===410)expired(error);
     }finally{running--;pump();}
   }
-  function pump(){if(disposed)return;for(const group of groups.values())for(const row of group.rows){if(running>=2)return;if(row.state==='selected'){running++;upload(row);}}}
+  function pump(){if(disposed)return;for(const group of groups.values())for(const row of group.rows){if(running>=2)return;if(row.state==='selected'){running++;row.task=upload(row);}}}
   function mount(field,index){
     const wrap=node('div','relay-field'),label=node('h2','relay-field-label',field.label),picker=node('div','relay-upload');
     if(field.showRequired)label.append(node('span','required',' · مطلوب'));
@@ -106,7 +145,7 @@ export function createAttachments({api,changed,expired}) {
     group.more=node('li','relay-add-tile');group.more.append(action('إضافة المزيد',choose,'relay-add-more'));group.more.hidden=true;list.append(group.more);
     picker.append(group.add,node('p','field-hint','صوّر المستند أو اختره من جهازك.'));
     const formatNames=types.map(t=>({'application/pdf':'PDF','image/jpeg':'JPG','image/png':'PNG'}[t]||t));
-    picker.append(node('p','relay-limits',`${formatNames.join('، ')} · حتى ${new Intl.NumberFormat('ar-EG').format(limits(field).count)} ملفات · ٢٠ ميغابايت للملف`));
+    picker.append(node('p','relay-limits',`${formatNames.join('، ')} · حتى ${new Intl.NumberFormat('ar-EG').format(limits(field).count)} ملفات · ٥٠ ميغابايت للملف`));
     picker.addEventListener('dragover',event=>event.preventDefault());picker.addEventListener('drop',event=>{event.preventDefault();if(!picker.closest('fieldset')?.disabled)addFiles([...event.dataTransfer.files]);});
     wrap.append(label);if(field.description)wrap.append(node('p','field-hint',field.description));wrap.append(picker,list,summary,issues,err);error('');
     return {wrap,input:group.add,error,field};

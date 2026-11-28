@@ -1,7 +1,7 @@
 async (page) => {
   const results=[];
   const check=(value,name)=>{if(!value)throw new Error(name);results.push(name);};
-  const origin='http://127.0.0.1:8000';
+  const origin='http://127.0.0.1:8001';
   const html=await (await page.request.get(origin+'/relay.html')).text();
   const fixture={title:'تأكيد رصيد الحساب',instructions:'برجاء إرسال رصيد الحساب وكشف الحساب المتاح لديكم.',expiresAt:'2099-12-01T00:00:00Z',status:'OPEN',allowPartial:true,allowMultiple:true,form:{schemaVersion:1,fields:[{key:'balance',type:'decimal',label:'رصيد الحساب',required:true},{key:'files',type:'attachments',label:'المرفقات',required:true,constraints:{maxFiles:3,allowedMediaTypes:['application/pdf','image/png']}}]}};
   let mode='ready',requests=[],uploads=0,submissions=[],release;
@@ -10,13 +10,14 @@ async (page) => {
   await page.route('**/env-config.js',route=>route.fulfill({contentType:'text/javascript',body:''}));
   await page.route('https://api.alqabasy.com/**',async route=>{
     const req=route.request(),path=new URL(req.url()).pathname;requests.push(path);
-    if(path.endsWith('/uploads')){uploads++;return envelope(route,{sessionId:'s'+uploads});}
+    if(path.endsWith('/uploads')){uploads++;return envelope(route,{sessionId:'s'+uploads,evidenceId:'e'+uploads});}
     if(path.endsWith('/complete')){
       if(mode==='hold')await new Promise(resolve=>release=resolve);
       if(mode==='413')return envelope(route,{},413);
       if(mode==='network')return route.abort();
       return envelope(route,{evidenceId:'e'+uploads});
     }
+    if(req.method()==='DELETE')return envelope(route,{evidenceId:path.split('/').pop(),failureCode:'USER_ABANDONED'});
     if(path.includes('/evidence/'))return envelope(route,{status:mode==='processing'?'PROCESSING':mode==='rejected'?'REJECTED':'READY'});
     if(path.endsWith('/submissions')){submissions.push(JSON.parse(req.postData()));if(mode==='submit-network'){mode='ready';return route.abort();}if(mode==='submit-fail')return envelope(route,{},422);return envelope(route,{status:'SUBMITTED',submissionId:'response-1'});}
     return envelope(route,fixture);
@@ -37,7 +38,7 @@ async (page) => {
   mode='ready';await open();await pick([file('one.pdf'),file('two.pdf'),file('three.pdf'),file('four.pdf')]);await page.locator('.relay-tile[data-state=ready]').first().waitFor();check(await page.locator('.relay-tile').count()===3,'configured attachment limit');
   check(await send().isEnabled(),'attachments only enabled');
   await open();await pick({name:'bad.html',mimeType:'text/html',buffer:Buffer.from('test')});check(await page.locator('.relay-tile').count()===0,'unsupported file blocked');
-  await pick({name:'large.pdf',mimeType:'application/pdf',buffer:Buffer.alloc(21*1024*1024)});check(await page.locator('.relay-tile').count()===0,'oversized file blocked');
+  await page.evaluate(()=>{const file=new File(['%PDF-1.4'],'large.pdf',{type:'application/pdf'});Object.defineProperty(file,'size',{value:51*1024*1024});const input=document.querySelector('input[type=file]');Object.defineProperty(input,'files',{configurable:true,value:[file]});input.dispatchEvent(new Event('change'));delete input.files;});check(await page.locator('.relay-tile').count()===0,'oversized file blocked');
   mode='ready';await pick(file('good.pdf'));await page.locator('.relay-tile[data-state=ready]').waitFor();mode='413';await pick(file('bad.pdf'));await page.locator('.relay-tile[data-state=failed]').waitFor();check(await send().isDisabled(),'mixed failure blocks submission');check(await page.locator('.relay-tile[data-state=failed]').getByText('محاولة مجددًا').isHidden(),'permanent failure has no retry');await page.getByRole('button',{name:'إزالة bad.pdf'}).click();check(await send().isEnabled(),'removal restores eligibility');
   mode='submit-fail';await send().click();await page.locator('#relay-notice').filter({hasText:'لم نتمكن'}).waitFor();check(await page.locator('.relay-tile[data-state=ready]').count()===1,'submission failure preserves attachments');
   mode='submit-network';await send().click();await page.getByRole('button',{name:'التحقق وإعادة الإرسال'}).waitFor();check(await page.getByRole('textbox').isDisabled(),'ambiguous response freezes payload');const previous=submissions.at(-1);await page.getByRole('button',{name:'التحقق وإعادة الإرسال'}).click();await page.getByRole('heading',{name:'تم استلام ردك',exact:true}).waitFor();check(JSON.stringify(previous)===JSON.stringify(submissions.at(-1)),'ambiguous retry uses identical payload and key');

@@ -24,3 +24,18 @@ test('a malformed successful response is an ambiguous outcome',async()=>{
  const original=globalThis.fetch;globalThis.fetch=async()=>new Response('<html>proxy</html>',{status:200});
  try{await assert.rejects(createRelayApi('https://api.example','A'.repeat(43)).submit('same-key',{value:'1'}),e=>e.code==='ambiguous'&&e.status===0);}finally{globalThis.fetch=original;}
 });
+
+
+test('structured evidence error metadata survives JSON and binary transports',async()=>{
+ const fetchOriginal=globalThis.fetch,xhrOriginal=globalThis.XMLHttpRequest;
+ const error={code:'evidence.file_limit_reached',message:'limit',field:'attachments',messageKey:'relay.evidenceFileLimitReached',params:{maxFiles:20,activeFiles:20}};
+ globalThis.fetch=async()=>new Response(JSON.stringify({success:false,error}),{status:409});
+ globalThis.XMLHttpRequest=class {upload={};status=409;responseText=JSON.stringify({success:false,error});open(){}setRequestHeader(){}send(){this.onload();this.onloadend();}};
+ const verify=e=>e.code===error.code&&e.field===error.field&&e.messageKey===error.messageKey&&e.params.maxFiles===20&&e.params.activeFiles===20;
+ try{const api=createRelayApi('https://api.example','A'.repeat(43));await assert.rejects(api.createUpload('attachments',{name:'a.pdf',size:1,type:'application/pdf'}),verify);await assert.rejects(api.completeUpload('session',new Blob(['a']),()=>{}),verify);}finally{globalThis.fetch=fetchOriginal;globalThis.XMLHttpRequest=xhrOriginal;}
+});
+test('abandon uses public evidence DELETE with no body',async()=>{
+ const original=globalThis.fetch;let call;
+ globalThis.fetch=async(url,options)=>{call={url,options};return new Response(JSON.stringify({success:true,data:{evidenceId:'e1',failureCode:'USER_ABANDONED'}}));};
+ try{await createRelayApi('https://api.example','A'.repeat(43)).abandonEvidence('e1');assert.match(call.url,/\/evidence\/e1$/);assert.equal(call.options.method,'DELETE');assert.equal(call.options.body,undefined);}finally{globalThis.fetch=original;}
+});

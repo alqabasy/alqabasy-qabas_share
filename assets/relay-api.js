@@ -2,7 +2,7 @@
 /** @typedef {{schemaVersion:number,locale:string,title:string,fields:RelayField[]}} RelayForm */
 /** @typedef {{title:string,instructions?:string,expiresAt:string,allowPartial:boolean,allowMultiple:boolean,status:string,form:RelayForm}} RelayRequest */
 export class RelayError extends Error {
-  constructor(status, code, message, field) { super(message || code || 'request_failed'); this.status=status; this.code=code; this.field=field; }
+  constructor(status, code, message, field, messageKey, params) { super(message || code || 'request_failed'); this.status=status; this.code=code; this.field=field; this.messageKey=messageKey; this.params=params; }
 }
 export function createRelayApi(origin, token) {
   const base = `${origin.replace(/\/+$/, '')}/api/v1/r/${encodeURIComponent(token)}`;
@@ -23,7 +23,7 @@ export function createRelayApi(origin, token) {
         if(signal?.aborted){signal.removeEventListener('abort',abort);reject(new DOMException('Aborted','AbortError'));return;}
         xhr.upload.onprogress=e=>{ if(e.lengthComputable) onProgress(Math.round(e.loaded/e.total*100)); };
         xhr.onerror=()=>reject(new RelayError(0,'network','Network error'));
-        xhr.onload=()=>{let payload={};try{payload=JSON.parse(xhr.responseText)}catch{}; if(xhr.status<200||xhr.status>=300||payload.success!==true) reject(new RelayError(xhr.status,payload.error?.code,payload.error?.message,payload.error?.field));else resolve(payload.data);};
+        xhr.onload=()=>{let payload={};try{payload=JSON.parse(xhr.responseText)}catch{}; if(xhr.status<200||xhr.status>=300||payload.success!==true) reject(new RelayError(xhr.status,payload.error?.code,payload.error?.message,payload.error?.field,payload.error?.messageKey,payload.error?.params));else resolve(payload.data);};
         xhr.send(body);
       });
     }
@@ -37,7 +37,7 @@ export function createRelayApi(origin, token) {
     const response=await fetch(url,{method,headers,body:body===undefined?undefined:binary?body:JSON.stringify(body),cache:'no-store',referrerPolicy:'no-referrer',signal:controller.signal});
     const payload=await response.json().catch(()=>({}));
     if(response.ok&&typeof payload.success!=='boolean')throw new RelayError(0,'ambiguous');
-    if(!response.ok||payload.success!==true) throw new RelayError(response.status,payload.error?.code,payload.error?.message,payload.error?.field);
+    if(!response.ok||payload.success!==true) throw new RelayError(response.status,payload.error?.code,payload.error?.message,payload.error?.field,payload.error?.messageKey,payload.error?.params);
     return payload.data;
     } catch(error) {
       if(timedOut)throw new RelayError(0,'timeout');
@@ -50,6 +50,7 @@ export function createRelayApi(origin, token) {
     createUpload:(fieldKey,file,signal)=>call('/uploads','POST',{fieldKey,name:file.name,mimeType:file.type,sizeBytes:file.size},false,undefined,signal),
     completeUpload:(sessionId,file,onProgress,signal)=>call(`/uploads/${encodeURIComponent(sessionId)}/complete`,'POST',file,true,onProgress,signal),
     evidence:(id,signal)=>call(`/evidence/${encodeURIComponent(id)}`,'GET',undefined,false,undefined,signal),
+    abandonEvidence:(id,signal)=>call(`/evidence/${encodeURIComponent(id)}`,'DELETE',undefined,false,undefined,signal),
     submit:(idempotencyKey,answers,supersedesSubmissionId)=>call('/submissions','POST',{idempotencyKey,answers,...(supersedesSubmissionId?{supersedesSubmissionId}:{})})
   };
 }

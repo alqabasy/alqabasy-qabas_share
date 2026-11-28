@@ -1,0 +1,26 @@
+async page => {
+ const results=[];const check=(ok,name)=>{if(!ok)throw Error(name);results.push(name);};
+ await page.goto('http://127.0.0.1:8001/__demo/');
+ await page.evaluate(async()=>{
+  const {createAttachments}=await import('/assets/relay-attachments.js');
+  const host=document.createElement('div');document.body.replaceChildren(host);
+  window.calls=[];window.mode='ready';window.serial=0;
+  window.manager=createAttachments({changed:()=>{},expired:()=>{},api:{
+   createUpload:async()=>{const id='e'+ ++window.serial;if(window.mode==='init-hold')await new Promise(r=>window.release=r);return {evidenceId:id,sessionId:id};},
+   completeUpload:async id=>{window.calls.push('complete-start:'+id);if(window.mode==='uncertain')throw {status:0};if(window.mode==='hold')await new Promise(r=>window.release=r);window.calls.push('complete-end:'+id);return {evidenceId:id};},
+   evidence:async id=>{window.calls.push('poll:'+id);if(window.mode==='uncertain')return {status:'PENDING_UPLOAD',action:'UPLOAD_BYTES',session:{completedAt:null}};return window.mode==='scan'?{status:'FAILED',failureCode:'SCAN_UNAVAILABLE',scanAttempts:3,retryable:true,action:'WAIT_OR_CONTACT_SUPPORT'}:{status:'READY',retryable:false,action:'NONE'};},
+   abandonEvidence:async id=>{window.calls.push('delete:'+id);if(window.mode==='deny')throw {status:409,code:'evidence.abandon_unavailable'};if(window.mode==='delete-network')throw {status:0};return {evidenceId:id,failureCode:'USER_ABANDONED'};}
+  }});host.append(window.manager.mount({key:'files',label:'المرفقات'},0).wrap);
+ });
+ const pick=()=>page.locator('input[type=file]').first().setInputFiles({name:'one.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4')});
+ const remove=()=>page.getByRole('button',{name:'إزالة one.pdf'}).click();
+ await pick();await page.locator('[data-state=ready]').waitFor();await remove();await page.waitForFunction(()=>!document.querySelector('.relay-tile'));check(await page.evaluate(()=>window.calls.includes('delete:e1')),'ready removal calls abandon');
+ await page.evaluate(()=>window.mode='hold');await pick();await page.locator('[data-state=uploading]').waitFor();await remove();check(await page.locator('[data-state=removing]').count()===1,'removal has stable pending tile');check(await page.evaluate(()=>!window.calls.includes('delete:e2')),'no abandon while completion is active');check(await page.evaluate(()=>!!window.manager.problem('files')),'pending removal blocks submission');await page.evaluate(()=>window.release());await page.waitForFunction(()=>!document.querySelector('.relay-tile'));check(await page.evaluate(()=>window.calls.indexOf('delete:e2')>window.calls.indexOf('complete-end:e2')),'abandon follows completed transfer');
+ await page.evaluate(()=>window.mode='ready');await pick();await page.locator('[data-state=ready]').waitFor();await page.evaluate(()=>window.mode='delete-network');await remove();await page.locator('[data-state=failed]').waitFor();check(await page.locator('.relay-tile').count()===1,'failed deletion retains evidence tile');await page.evaluate(()=>window.mode='ready');await remove();await page.waitForFunction(()=>!document.querySelector('.relay-tile'));check(true,'failed deletion can safely be retried');
+ await page.evaluate(()=>window.mode='init-hold');await pick();await page.locator('[data-state=uploading]').waitFor();const initId=await page.evaluate(()=>'e'+window.serial);await remove();await page.evaluate(()=>window.release());await page.waitForFunction(()=>!document.querySelector('.relay-tile'));check(await page.evaluate(id=>window.calls.includes('delete:'+id)&&!window.calls.includes('complete-start:'+id),initId),'removal during initialization abandons without uploading bytes');
+ await page.evaluate(()=>window.mode='uncertain');await pick();await page.locator('[data-state=failed]').waitFor();const uncertainId=await page.evaluate(()=>'e'+window.serial);await remove();await page.locator('[data-state=failed]').waitFor();check(await page.evaluate(id=>!window.calls.includes('delete:'+id),uncertainId),'uncertain completion cannot race abandon');await page.evaluate(()=>window.mode='ready');await remove();await page.waitForFunction(()=>!document.querySelector('.relay-tile'));check(await page.evaluate(id=>window.calls.includes('delete:'+id),uncertainId),'confirmed status unlocks safe removal');
+ await page.evaluate(()=>window.mode='scan');await pick();await page.locator('[data-state=failed]').waitFor();check(await page.getByRole('button',{name:'التحقق مجددًا'}).isVisible(),'scan unavailable offers recheck');const count=await page.evaluate(()=>window.serial);await page.evaluate(()=>window.mode='ready');await page.getByRole('button',{name:'التحقق مجددًا'}).click();await page.locator('[data-state=ready]').waitFor();check(await page.evaluate(()=>window.serial)===count,'recheck never creates a new upload');
+ await page.evaluate(()=>window.mode='deny');await remove();await page.locator('[data-state=failed]').waitFor();check(await page.getByRole('button',{name:'إزالة one.pdf'}).isDisabled(),'submitted evidence removal is disabled after denial');check((await page.locator('.relay-file-errors').innerText()).includes('تم إرسال'),'submitted evidence denial is Arabic');
+ await page.evaluate(()=>window.manager.dispose());return results;
+}
+

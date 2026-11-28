@@ -1,5 +1,26 @@
 # Relay submission experience — delivery notes
 
+## Evidence API integration update (2026-11-28)
+
+This update supersedes the earlier limit/removal/polling findings below. API runtime inspected read-only at `D:/workspaces/qabas1/qabas1-api`: `relay.service.ts`, `relay.routes.ts`, `relay.form.ts`, `evidence.service.ts`, `evidence.worker.ts`, and `core/api/error_codes.type.ts`.
+
+- Preserve `field`, `messageKey`, and `params` through both JSON and XHR errors; translate stable `evidence.*` codes without exposing raw server text. Limit messages use `maxFiles`; size errors use `maxBytes`. The old English-message conflict match is removed.
+- Verified defaults are 20 files and 50 MiB; schema `maxFiles` still takes precedence. The inspect response does not expose a configurable byte limit, so 50 MiB matches the current API constant.
+- Retain evidence ID from initialization. Remove calls public `DELETE /api/v1/r/:token/evidence/:id`; card and submission gate remain pending until acknowledgement. Network failure preserves the card for retry. Submitted-evidence denial disables removal.
+- Wait for active initialization/transfer before DELETE. For ambiguous completion, require status confirmation before abandoning. No automatic new upload and no staff-only retry call. If initialization succeeds remotely but its response is lost, the unknown evidence ID cannot be abandoned from this client; the incomplete session expires server-side.
+- Map `failureCode`, `scanAttempts`, `retryable`, and `action`; temporary scan failures offer a status recheck. Public actions do not authorize staff scan retries.
+- Poll every 30 seconds with bounded backoff and at most 90 automatic/manual status checks per 15-minute page lifetime window, shared across additional-response forms. This reserves capacity within the API's 180 request limit; other tabs/clients can still exhaust the server limit.
+- Keep prior grid refinements and keep request `instructions` hidden.
+
+Backend follow-up found during source review (no backend edits):
+
+1. `abandonEvidence` skips mutation/audit whenever the existing status is `FAILED`, yet returns `USER_ABANDONED`. The worker only cleans stored objects marked `USER_ABANDONED`. A `SCAN_UNAVAILABLE` file may therefore remain stored or eligible for another scan after the endpoint reports removal. Fix the guard to recognize already-abandoned failure codes rather than every FAILED state. Test abandonment of a failed scan with fewer than three attempts, asserting audit, terminal marker and eventual cleanup. Severity: medium (retention and lifecycle correctness).
+2. `completeUpload` writes PROCESSING without checking an abandoned state and does not share the evidence lock used by abandon. Completion from another tab/in-flight request can undo abandonment. The frontend serializes its own known operations but cannot enforce cross-client ordering. Add a shared lock/state guard and a race regression test. Severity: medium (slot recovery and stored-object lifecycle).
+
+Verification for this integration: 18 Node tests; the existing 53 Playwright assertions rerun against updated fixtures; dedicated recovery browser checks cover acknowledged deletion, pending removal, transfer/initialization races, lost completion, deletion failure/retry, scan recheck without reupload, and submitted-evidence denial. API `npm run ai:check` passed. Browser fixtures run on `http://127.0.0.1:8001` with synthetic files; no production API calls or deployments.
+
+## Original delivery record
+
 ## Scope and architecture
 
 The existing static, Arabic RTL renderer is retained. No framework, package dependency, backend contract, accounting behavior, or deployment architecture was changed.
