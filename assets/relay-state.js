@@ -15,6 +15,10 @@ export function fileError(field, file, rows) {
   return '';
 }
 export function userError(error) {
+  // This API uses a shared conflict code; match the known message narrowly.
+  if (error.code === 'conflict' && error.message?.trim() === 'Evidence field file limit reached.') {
+    return 'تمت إضافة الحد الأقصى من المرفقات.';
+  }
   if (error.code === 'timeout') return 'استغرقت العملية وقتًا طويلًا. تحقق من اتصالك.';
   return ({0:'انقطع الاتصال بالإنترنت.',400:'لم نتمكن من قبول هذا الملف.',401:'الرابط غير متاح. تواصل مع المرسل.',403:'الرابط غير متاح. تواصل مع المرسل.',404:'الرابط أو المرفق غير متاح.',409:'تعذّر قبول العملية. ربما تغيّرت حالة الطلب.',410:'انتهت صلاحية هذا الرابط.',413:'حجم الملف أكبر من المسموح.',415:'نوع الملف غير مدعوم.',422:'لم نتمكن من قبول هذا الملف.',429:'انتظر قليلًا ثم حاول مجددًا.'})[error.status] || 'الخدمة غير متاحة مؤقتًا.';
 }

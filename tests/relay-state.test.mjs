@@ -25,3 +25,10 @@ test('error policy never exposes raw responses and separates permanent failures'
  assert.equal(recoverable({status:0}),true);
  assert.ok(!userError({status:500,message:'secret-token'}).includes('secret'));
 });
+
+
+test('evidence file-count conflict is distinct from file-size and other conflicts',()=>{
+ assert.equal(userError({status:409,code:'conflict',message:'Evidence field file limit reached.'}),'تمت إضافة الحد الأقصى من المرفقات.');
+ assert.equal(userError({status:413}),'حجم الملف أكبر من المسموح.');
+ assert.equal(userError({status:409,code:'conflict',message:'Another conflict.'}),'تعذّر قبول العملية. ربما تغيّرت حالة الطلب.');
+});
