@@ -98,7 +98,7 @@ function render(){
     submission='submitting';updateAction();notice('');
     try{
       const response=await api.submit(draftKey,answers,receipt&&request.allowMultiple?receipt.submissionId:undefined);
-      if(!response?.submissionId||!['SUBMITTED','EVIDENCE_PENDING'].includes(response.status))throw new RelayError(0,'ambiguous');
+      if(!response?.submissionId||!['SUBMITTED','EVIDENCE_PENDING', "READY"].includes(response.status))throw new RelayError(0,'ambiguous');
       receipt=response;submission='submitted';attachments.dispose();
       state('تم استلام ردك','شكرًا لتعاونكم. '+(receipt.status==='EVIDENCE_PENDING'?'تم استلام المعلومات والمرفقات، وجارٍ تجهيزها.':'تم إرسال المعلومات بنجاح.')+' يمكنك إغلاق هذه الصفحة الآن.',request.allowMultiple?button('إضافة معلومات أخرى',()=>{draftKey=null;draftAnswers=null;render();}):null);
       root.querySelector('h1').tabIndex=-1;root.querySelector('h1').focus();
