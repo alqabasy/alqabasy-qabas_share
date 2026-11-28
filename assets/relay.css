@@ -25,16 +25,21 @@ textarea.relay-input{min-block-size:7rem;resize:vertical}
 .relay-camera-button{inline-size:100%;min-block-size:3.25rem;font-weight:600}
 .relay-files{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.5rem}
 .relay-files:has(>li:only-child[hidden]){display:none}
-.relay-tile{display:grid;grid-template-rows:6rem 3rem .35rem 2.75rem;align-content:start;min-inline-size:0;border:1px solid var(--border);border-radius:.5rem;background:white;overflow:hidden}
-.relay-thumbnail{padding:0;border:0;border-block-end:1px solid var(--border);background:#edf1eb;cursor:pointer;inline-size:100%;block-size:6rem;color:var(--forest)}
+.relay-tile,.relay-add-tile{position:relative;inline-size:100%;min-inline-size:0;min-block-size:9rem;aspect-ratio:1;border-radius:.5rem}
+.relay-tile{border:1px solid var(--border);background:#edf1eb;overflow:hidden}
+.relay-thumbnail{position:absolute;inset:0;padding:0;border:0;background:#edf1eb;cursor:pointer;inline-size:100%;block-size:100%;color:var(--forest)}
 .relay-thumbnail img{inline-size:100%;block-size:100%;object-fit:contain}
 .relay-document{font-size:1rem;font-weight:600}
-.relay-file-status{font-size:.75rem;line-height:1.5;padding:.35rem;text-align:center;overflow-wrap:anywhere}
+.relay-file-status:not(.visually-hidden){position:absolute;inset-inline:0;inset-block-end:.35rem;margin:0;background:rgb(255 255 255 / .96);font-size:.75rem;line-height:1.5;padding:.35rem;text-align:center;overflow-wrap:anywhere;pointer-events:none}
 .relay-tile[data-state="failed"] .relay-file-status,.relay-tile[data-state="rejected"] .relay-file-status{color:var(--error)}
-.relay-tile progress{inline-size:calc(100% - .75rem);block-size:.35rem;margin:0 .375rem;accent-color:var(--forest)}
-.relay-tile .relay-small-button{border:0;border-block-start:1px solid var(--border);border-radius:0;font-size:.75rem;inline-size:100%;padding:.4rem .2rem}
-.relay-add-tile{min-inline-size:0;display:flex}
-.relay-add-more{inline-size:100%;min-block-size:9rem;border-style:dashed;font-size:.85rem;background:transparent}
+.relay-tile:has(.relay-retry:not([hidden])) .relay-file-status{inset-block-end:2.75rem}
+.relay-tile progress{position:absolute;inset-inline:0;inset-block-end:0;inline-size:100%;block-size:.35rem;margin:0;accent-color:var(--forest)}
+.relay-tile .relay-remove,.relay-tile .relay-retry{position:absolute;border:0;font-size:.8rem;min-block-size:2.75rem;padding:.5rem .75rem;background:rgb(255 255 255 / .96);color:var(--forest);text-decoration:underline;text-underline-offset:.2em}
+.relay-tile .relay-remove{inset-block-start:0;inset-inline-end:0;border-radius:0 0 .5rem 0}
+.relay-tile .relay-retry{inset-block-end:0;inset-inline:0;inline-size:100%;border-radius:0}
+.relay-tile button:focus-visible{outline-offset:-3px}
+.relay-add-tile{display:flex;grid-column:1;grid-row:1}
+.relay-add-more{inline-size:100%;block-size:100%;border-style:dashed;font-size:.85rem;background:transparent}
 .relay-actions{display:grid;gap:.5rem;border-block-start:1px solid var(--border);padding-block-start:1rem}
 .relay-actions .button{max-inline-size:none;inline-size:100%;min-block-size:3.25rem}
 .relay-actions .field-hint:empty,.relay-field>.field-hint:empty{display:none}
@@ -53,7 +58,8 @@ textarea.relay-input{min-block-size:7rem;resize:vertical}
 @media(prefers-reduced-motion:reduce){.relay-page *{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 @media(forced-colors:active){.relay-tile,.relay-input,.relay-camera-button,.relay-add-more,.relay-small-button{border-color:ButtonText}}
 
-.relay-tile-actions{display:flex;min-inline-size:0}
-.relay-tile-actions .relay-small-button{flex:1;min-inline-size:0}
+.relay-tile-actions{display:contents}
 .relay-tile:not([data-state="uploading"]) progress{visibility:hidden}
 .relay-file-errors{white-space:pre-line}
+
+@media(max-width:24rem){.relay-files{grid-template-columns:repeat(2,minmax(0,1fr))}}

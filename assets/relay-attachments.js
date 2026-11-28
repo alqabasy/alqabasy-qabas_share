@@ -9,7 +9,8 @@ export function createAttachments({api,changed,expired}) {
   function current(row,version){return !disposed&&row.state!=='removed'&&row.version===version;}
   function refresh(){for(const group of groups.values()){
     const rows=activeRows(group.rows),busy=rows.filter(r=>['selected','uploading'].includes(r.state));
-    group.add.hidden=rows.length>0;group.more.hidden=!rows.length||rows.length>=limits(group.field).count;
+    group.add.hidden=rows.length>0;group.more.hidden=!rows.length;
+    const more=group.more.querySelector("button");more.disabled=rows.length>=limits(group.field).count;more.textContent=more.disabled?"اكتمل عدد المرفقات":"إضافة المزيد";
     group.add.disabled=rows.length>=limits(group.field).count;
     const problems=rows.map((row,index)=>row.error?`المرفق ${new Intl.NumberFormat('ar-EG').format(index+1)}: ${row.error}`:'').filter(Boolean).join('\n');
     if(group.issues.textContent!==problems)group.issues.textContent=problems;group.issues.hidden=!problems;
@@ -38,12 +39,13 @@ export function createAttachments({api,changed,expired}) {
       const status=node('p','relay-file-status'),progress=node('progress');status.role='status';progress.max=100;progress.setAttribute('aria-label',`تقدم رفع ${row.file.name}`);
       const retry=action('محاولة مجددًا',()=>{row.state=row.id?'processing':'selected';row.error='';row.polls=0;draw(row);if(row.id)poll(row);else pump();refresh();});
       const remove=action('إزالة',()=>{row.state='removed';row.version++;row.controller?.abort();clearTimeout(row.timer);URL.revokeObjectURL(row.url);tile.remove();refresh();(row.group.more.hidden?row.group.add:row.group.more.querySelector('button')).focus();pump();});
+      remove.classList.add('relay-remove');retry.classList.add('relay-retry');
       remove.setAttribute('aria-label',`إزالة ${row.file.name}`);
-      const actions=node('div','relay-tile-actions');actions.append(retry,remove);tile.append(view,status,progress,actions);row.group.list.insertBefore(tile,row.group.more);
+      const actions=node('div','relay-tile-actions');actions.append(retry,remove);tile.append(view,status,progress,actions);row.group.list.append(tile);
       row.ui={tile,view,status,progress,retry,remove};
     }
     const {tile,status,progress,retry}=row.ui;
-    tile.dataset.state=row.state;status.setAttribute('aria-live',row.state==='uploading'?'off':'polite');
+    tile.dataset.state=row.state;status.classList.toggle('visually-hidden',row.state==='ready');status.setAttribute('aria-live',row.state==='uploading'?'off':'polite');
     status.textContent=({selected:'بانتظار الرفع',uploading:row.progress===100?'جارٍ تجهيز المرفق':`جارٍ الرفع${row.progress==null?'':` ${row.progress}٪`}`,processing:'جارٍ تجهيز المرفق',ready:'تمت الإضافة',rejected:'لم نتمكن من قبول هذا الملف.',failed:'تعذّر رفع المرفق.'})[row.state];
     if(row.progress==null)progress.removeAttribute('value');else progress.value=row.progress;
     retry.hidden=row.state!=='failed'||!row.retryable;
