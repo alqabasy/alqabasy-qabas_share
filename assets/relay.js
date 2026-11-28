@@ -19,30 +19,26 @@ async function load(){if(!api)return state('الرابط غير صالح','تح�
 function fieldView(field,index){const wrap=el('div','relay-field'),id=`relay-field-${index}`,label=el('label','',field.label);label.htmlFor=id;wrap.append(label);label.append(el('span',field.required?'required':'optional',field.required?' · مطلوب':' · اختياري'));if(field.description){const d=el('p','field-hint',field.description);d.id=`${id}-hint`;wrap.append(d);}let input;
   if(field.type==='multiline_text')input=el('textarea','relay-input');else if(field.type==='select'){input=el('select','relay-input');input.append(new Option('اختر إجابة',''));for(const option of field.constraints?.options||[]){const value=typeof option==='string'?option:option.value;const name=typeof option==='string'?option:option.label;input.append(new Option(name,value));}}else if(field.type==='boolean'){input=el('input');input.type='checkbox';wrap.classList.add('relay-check');}else if(['attachments','evidence'].includes(field.type)){
     label.removeAttribute('for');
-    const constraints=field.constraints||{},allowed=constraints.allowedMediaTypes||['application/pdf','image/jpeg','image/png'],limit=Math.min(5,constraints.maxFiles??5),listId=`${id}-files`,upload=el('div','relay-upload'),picker=el('input','visually-hidden');
-    picker.type='file';picker.multiple=limit>1;picker.accept=allowed.join(',');picker.tabIndex=-1;picker.setAttribute('aria-hidden','true');
+    const constraints=field.constraints||{},allowed=constraints.allowedMediaTypes||['application/pdf','image/jpeg','image/png'],limit=Math.min(5,constraints.maxFiles??5),listId=`${id}-files`,upload=el('div','relay-upload');
     const imageTypes=allowed.filter(type=>type.startsWith('image/'));
     const photoPicker=imageTypes.length>0&&limit>1?el('input','visually-hidden'):null;
     if(photoPicker){photoPicker.type='file';photoPicker.multiple=true;photoPicker.accept=imageTypes.join(',');photoPicker.tabIndex=-1;photoPicker.setAttribute('aria-hidden','true');}
     const camera=imageTypes.length?el('input','visually-hidden'):null;
     if(camera){camera.type='file';camera.accept=imageTypes.join(',');camera.capture='environment';camera.tabIndex=-1;camera.setAttribute('aria-hidden','true');}
-    const choose=button('اختيار ملفات من الجهاز',()=>picker.click(),'relay-upload-button');
-    choose.setAttribute('aria-label',`${field.label}${field.required?'، مطلوب':''}: اختيار ملفات من الجهاز`);choose.setAttribute('aria-controls',listId);
-    const actions=el('div','relay-upload-actions');actions.append(choose);
+    const actions=el('div','relay-upload-actions');
     let photoButton;
     if(photoPicker){photoButton=button('اختيار صور متعددة',()=>photoPicker.click(),'relay-camera-button');photoButton.setAttribute('aria-label',`${field.label}${field.required?'، مطلوب':''}: اختيار صور متعددة`);photoButton.setAttribute('aria-controls',listId);actions.append(photoButton);}
     let cameraButton;
     if(camera){cameraButton=button('التقاط صورة بالكاميرا',()=>camera.click(),'relay-camera-button');cameraButton.setAttribute('aria-label',`${field.label}${field.required?'، مطلوب':''}: التقاط صورة بالكاميرا`);cameraButton.setAttribute('aria-controls',listId);actions.append(cameraButton);}
-    input=choose;input.id=`${id}-choose`;input.setAttribute('aria-describedby',[field.description?`${id}-hint`:'',`${id}-upload-hint`].filter(Boolean).join(' '));
+    input=photoButton||cameraButton;input.id=`${id}-choose`;input.setAttribute('aria-describedby',[field.description?`${id}-hint`:'',`${id}-upload-hint`].filter(Boolean).join(' '));
     for(const control of [photoButton,cameraButton].filter(Boolean))control.setAttribute('aria-describedby',[field.description?`${id}-hint`:'',`${id}-upload-hint`].filter(Boolean).join(' '));
     const formats=allowed.map(type=>({'application/pdf':'PDF','image/jpeg':'JPG','image/png':'PNG'}[type]||type)).join(' أو ');
     const info=el('p','field-hint',`${formats} · حتى ${new Intl.NumberFormat('ar-EG').format(limit)} ملفات · ٢٠ ميغابايت لكل ملف`);info.id=`${id}-upload-hint`;
     const prompt=el('p','relay-upload-prompt','أضف صورًا أو مستندات للفترة'),list=el('ul','relay-files');list.id=listId;list.setAttribute('aria-label',`الملفات المختارة لـ ${field.label}`);
-    upload.append(prompt,actions,info,picker);if(photoPicker)upload.append(photoPicker);if(camera)upload.append(camera);wrap.append(upload);
+    upload.append(prompt,actions,info);if(photoPicker)upload.append(photoPicker);if(camera)upload.append(camera);wrap.append(upload);
     const err=el('p','relay-error');err.id=`${id}-error`;err.setAttribute('role','alert');err.hidden=true;
-    function error(message){err.textContent=message;err.hidden=!message;for(const control of [choose,photoButton,cameraButton].filter(Boolean)){control.setAttribute('aria-invalid',String(!!message));control.setAttribute('aria-describedby',[field.description?`${id}-hint`:'',`${id}-upload-hint`,message?err.id:''].filter(Boolean).join(' '));}}
+    function error(message){err.textContent=message;err.hidden=!message;for(const control of [photoButton,cameraButton].filter(Boolean)){control.setAttribute('aria-invalid',String(!!message));control.setAttribute('aria-describedby',[field.description?`${id}-hint`:'',`${id}-upload-hint`,message?err.id:''].filter(Boolean).join(' '));}}
     wrap.append(err,list);uploads.set(field.key,[]);
-    picker.addEventListener('change',()=>{addFiles(field,picker.files,list,error);picker.value='';});
     photoPicker?.addEventListener('change',()=>{addFiles(field,photoPicker.files,list,error);photoPicker.value='';});
     camera?.addEventListener('change',()=>{addFiles(field,camera.files,list,error);camera.value='';});
     return {wrap,input,error,field};
